@@ -200,11 +200,19 @@
 </div>
 
 <script>
+  // Constants
   const FALLBACK_IMAGE = 'https://www.aloshy.ai/images/bg.png';
   const ROTATION_INTERVAL = 10000; // 10 seconds
-  const FULLSCREEN_DELAY = 1000; // Delay before requesting fullscreen (1 second)
+  const FULLSCREEN_DELAY = 1000; // 1 second
 
-  // Add default parameters
+  const CACHE_CONFIG = {
+    maxImages: 50,           // Maximum number of images to store
+    cacheExpiry: 24 * 3600, // Cache expiry in seconds (24 hours)
+    storageKey: 'imageCache',
+    urlsKey: 'imageCacheUrls'
+  };
+
+  // Default parameters
   const DEFAULT_PARAMS = {
     limit: 100,
     nsfw: 'None',
@@ -213,24 +221,177 @@
     page: 1
   };
 
+  class ImageCache {
+    constructor(config = CACHE_CONFIG) {
+      this.config = config;
+      this.supportedStorage = this.checkStorageSupport();
+    }
+
+    checkStorageSupport() {
+      try {
+        const storage = {
+          localStorage: !!window.localStorage,
+          indexedDB: !!window.indexedDB
+        };
+        return storage;
+      } catch (e) {
+        console.warn('Storage not available:', e);
+        return {localStorage: false, indexedDB: false};
+      }
+    }
+
+    async storeImageBlob(url, blob) {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('ImageDB', 1);
+
+        request.onerror = () => reject(new Error('IndexedDB access denied'));
+
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('images')) {
+            db.createObjectStore('images', {keyPath: 'url'});
+          }
+        };
+
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          const transaction = db.transaction(['images'], 'readwrite');
+          const store = transaction.objectStore('images');
+
+          const item = {
+            url,
+            blob,
+            timestamp: Date.now()
+          };
+
+          store.put(item).onsuccess = () => resolve();
+        };
+      });
+    }
+
+    async getImageBlob(url) {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('ImageDB', 1);
+
+        request.onerror = () => reject(new Error('IndexedDB access denied'));
+
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          const transaction = db.transaction(['images'], 'readonly');
+          const store = transaction.objectStore('images');
+
+          const getRequest = store.get(url);
+
+          getRequest.onsuccess = () => {
+            const item = getRequest.result;
+            if (item && Date.now() - item.timestamp < this.config.cacheExpiry * 1000) {
+              resolve(item.blob);
+            } else {
+              resolve(null);
+            }
+          };
+        };
+      });
+    }
+
+    storeImageUrls(urls) {
+      if (!this.supportedStorage.localStorage) return;
+
+      const cachedUrls = {
+        urls: urls.slice(0, this.config.maxImages),
+        timestamp: Date.now()
+      };
+
+      try {
+        localStorage.setItem(this.config.urlsKey, JSON.stringify(cachedUrls));
+      } catch (e) {
+        console.warn('localStorage quota exceeded:', e);
+      }
+    }
+
+    getImageUrls() {
+      if (!this.supportedStorage.localStorage) return null;
+
+      try {
+        const cached = JSON.parse(localStorage.getItem(this.config.urlsKey));
+        if (cached && Date.now() - cached.timestamp < this.config.cacheExpiry * 1000) {
+          return cached.urls;
+        }
+      } catch (e) {
+        console.warn('Error retrieving cached URLs:', e);
+      }
+      return null;
+    }
+
+    async preloadImages(urls) {
+      const preloadPromises = urls.map(async (url) => {
+        try {
+          // Check if image is already cached
+          const cachedBlob = await this.getImageBlob(url);
+          if (cachedBlob) return url;
+
+          // Fetch and cache new image
+          const response = await fetch(url);
+          const blob = await response.blob();
+          await this.storeImageBlob(url, blob);
+          return url;
+        } catch (e) {
+          console.warn(`Failed to preload image: ${url}`, e);
+          return null;
+        }
+      });
+
+      return (await Promise.all(preloadPromises)).filter(url => url !== null);
+    }
+
+    async clearExpiredCache() {
+      if (this.supportedStorage.indexedDB) {
+        const request = indexedDB.open('ImageDB', 1);
+
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          const transaction = db.transaction(['images'], 'readwrite');
+          const store = transaction.objectStore('images');
+
+          const cursorRequest = store.openCursor();
+
+          cursorRequest.onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (cursor) {
+              if (Date.now() - cursor.value.timestamp > this.config.cacheExpiry * 1000) {
+                store.delete(cursor.key);
+              }
+              cursor.continue();
+            }
+          };
+        };
+      }
+
+      if (this.supportedStorage.localStorage) {
+        const cached = this.getImageUrls();
+        if (!cached) {
+          localStorage.removeItem(this.config.urlsKey);
+        }
+      }
+    }
+  }
+
+  // Global variables
   let imageCache = [];
   let currentImageIndex = 0;
   let backgrounds = document.querySelectorAll('.background');
   let activeIndex = 0;
   let isTransitioning = false;
 
-  // Add function to parse URL parameters
   function getQueryParams() {
     const urlParams = new URLSearchParams(window.location.search);
     const params = {...DEFAULT_PARAMS};
 
-    // Parse limit (ensure it's within 0-200)
     if (urlParams.has('limit')) {
       const limit = parseInt(urlParams.get('limit'));
       params.limit = Math.min(Math.max(0, limit), 200);
     }
 
-    // Parse nsfw level - case insensitive
     if (urlParams.has('nsfw')) {
       const nsfw = urlParams.get('nsfw').toLowerCase();
       const validNsfw = {
@@ -244,7 +405,6 @@
       }
     }
 
-    // Parse sort - case-insensitive
     if (urlParams.has('sort')) {
       const sort = urlParams.get('sort').toLowerCase();
       const validSort = {
@@ -259,7 +419,6 @@
       }
     }
 
-    // Parse period - case insensitive
     if (urlParams.has('period')) {
       const period = urlParams.get('period').toLowerCase();
       const validPeriod = {
@@ -274,7 +433,6 @@
       }
     }
 
-    // Parse page
     if (urlParams.has('page')) {
       const page = parseInt(urlParams.get('page'));
       if (page > 0) {
@@ -285,8 +443,25 @@
     return params;
   }
 
+  // Fisher-Yates shuffle function
+  function shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+  }
+
   async function fetchImageUrls() {
     try {
+      const imageCache = new ImageCache();
+
+      // Try to get cached URLs first
+      const cachedUrls = imageCache.getImageUrls();
+      if (cachedUrls && cachedUrls.length > 0) {
+        return cachedUrls;
+      }
+
       const params = getQueryParams();
       const queryString = new URLSearchParams({
         limit: params.limit,
@@ -304,44 +479,29 @@
 
       const data = await response.json();
 
-      // Filter based on NSFW settings
       let filteredItems = data.items;
       if (params.nsfw.toLowerCase() === 'x') {
-        // For explicit content, only show items marked as NSFW and level X
         filteredItems = filteredItems?.filter(item =>
                 item.nsfw === true && item.nsfwLevel === 'X'
         );
       } else if (params.nsfw.toLowerCase() === 'none') {
-        // For safe content, only show items marked as not NSFW and level None
         filteredItems = filteredItems?.filter(item =>
                 item.nsfw === false && item.nsfwLevel === 'None'
         );
       }
 
-      // Add Fisher-Yates shuffle function
-      const shuffle = array => {
-        for (let i = array.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [array[i], array[j]] = [array[j], array[i]];
-        }
-        return array;
-      };
+      const urls = shuffle(filteredItems?.map(item => item.url) || []);
 
-      // Shuffle the filtered items before returning
-      return shuffle(filteredItems?.map(item => item.url) || []);
+      imageCache.storeImageUrls(urls);
+      await imageCache.preloadImages(urls);
+
+      await imageCache.clearExpiredCache();
+
+      return urls;
     } catch (error) {
       console.warn('Error fetching images:', error);
       return null;
     }
-  }
-
-  async function preloadImage(url) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(url);
-      img.onerror = () => reject(new Error('Image load failed'));
-      img.src = url;
-    });
   }
 
   async function transition() {
@@ -353,21 +513,17 @@
 
       backgrounds[nextIndex].src = imageCache[currentImageIndex];
 
-      // Wait a brief moment to ensure the image is loaded
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Perform the transition
       backgrounds[activeIndex].classList.remove('active');
       backgrounds[nextIndex].classList.add('active');
 
-      // Update indices
       activeIndex = nextIndex;
       currentImageIndex = (currentImageIndex + 1) % imageCache.length;
 
-      // Reset transitioning flag after animation completes
       setTimeout(() => {
         isTransitioning = false;
-      }, 2000); // Match this with your CSS transition duration
+      }, 2000);
     } catch (error) {
       console.warn('Error during transition:', error);
       isTransitioning = false;
@@ -387,9 +543,9 @@
       const elem = document.documentElement;
       if (elem.requestFullscreen) {
         await elem.requestFullscreen();
-      } else if (elem.webkitRequestFullscreen) { // Safari
+      } else if (elem.webkitRequestFullscreen) {
         await elem.webkitRequestFullscreen();
-      } else if (elem.msRequestFullscreen) { // IE11
+      } else if (elem.msRequestFullscreen) {
         await elem.msRequestFullscreen();
       }
     } catch (error) {
@@ -397,24 +553,25 @@
     }
   }
 
-  // Initialize
-  (async () => {
+  // Initialize everything
+  async function initializeImageRotation() {
     try {
-      const fetchedImages = await fetchImageUrls();
+      const imageCacheInstance = new ImageCache();
+      const urls = await fetchImageUrls();
 
-      if (!fetchedImages || fetchedImages.length === 0) {
+      if (!urls || urls.length === 0) {
         showFallback();
         return;
       }
 
-      imageCache = fetchedImages;
+      imageCache = urls;
 
       // Set up first image
       backgrounds[0].src = imageCache[0];
       backgrounds[0].classList.add('active');
       currentImageIndex = 1;
 
-      // Request fullscreen after a short delay
+      // Request fullscreen after delay
       setTimeout(requestFullscreen, FULLSCREEN_DELAY);
 
       // Start rotation
@@ -423,7 +580,10 @@
       console.warn('Error in initialization:', error);
       showFallback();
     }
-  })();
+  }
+
+  // Start everything when the page loads
+  window.addEventListener('load', initializeImageRotation);
 </script>
 </body>
 </html>
