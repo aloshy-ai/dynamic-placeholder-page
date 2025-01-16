@@ -284,7 +284,7 @@
     return params;
   }
 
-  async function fetchImages() {
+  async function fetchImageUrls() {
     try {
       const params = getQueryParams();
       const queryString = new URLSearchParams({
@@ -323,29 +323,26 @@
 
     try {
       isTransitioning = true;
-      const nextIndex = (activeIndex + 1) % 2;
+      const nextIndex = (activeIndex + 1) % 2; // We have 2 background elements
 
-      // Get next image URL
-      const imageUrl = imageCache[currentImageIndex].url;
-      currentImageIndex = (currentImageIndex + 1) % imageCache.length;
+      // Set the next image's source
+      backgrounds[nextIndex].src = imageCache[currentImageIndex].url;
 
-      // Preload next image
-      await preloadImage(imageUrl);
+      // Wait a brief moment to ensure the image is loaded
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Set up next image
-      backgrounds[nextIndex].src = imageUrl;
-
-      // Trigger transition
+      // Perform the transition
       backgrounds[activeIndex].classList.remove('active');
       backgrounds[nextIndex].classList.add('active');
 
-      // Update active index
+      // Update indices
       activeIndex = nextIndex;
+      currentImageIndex = (currentImageIndex + 1) % imageCache.length;
 
-      // Reset transition flag after animation completes
+      // Reset transitioning flag after animation completes
       setTimeout(() => {
         isTransitioning = false;
-      }, 2000);
+      }, 2000); // Match this with your CSS transition duration
     } catch (error) {
       console.warn('Error during transition:', error);
       isTransitioning = false;
@@ -363,33 +360,17 @@
   // Initialize
   (async () => {
     try {
-      const fetchedImages = await fetchImages();
+      const fetchedImages = await fetchImageUrls();
 
-      // Show fallback only if API failed
-      if (!fetchedImages) {
+      if (!fetchedImages || fetchedImages.length === 0) {
         showFallback();
         return;
       }
 
-      // Filter out any invalid URLs and store valid ones
-      for (const image of fetchedImages) {
-        try {
-          await preloadImage(image.url);
-          imageCache.push(image);
-        } catch (error) {
-          console.warn('Failed to load image:', image.url);
-        }
-      }
-
-      // If no valid images after checking all URLs, show fallback
-      if (imageCache.length === 0) {
-        showFallback();
-        return;
-      }
+      imageCache = fetchedImages;
 
       // Set up first image
-      const firstImage = imageCache[0];
-      backgrounds[0].src = firstImage.url;
+      backgrounds[0].src = imageCache[0].url;
       backgrounds[0].classList.add('active');
 
       // Start rotation
