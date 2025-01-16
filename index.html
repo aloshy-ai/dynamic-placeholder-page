@@ -303,7 +303,32 @@
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       const data = await response.json();
-      return data.items || [];
+
+      // Filter based on NSFW settings
+      let filteredItems = data.items;
+      if (params.nsfw.toLowerCase() === 'x') {
+        // For explicit content, only show items marked as NSFW and level X
+        filteredItems = filteredItems?.filter(item =>
+                item.nsfw === true && item.nsfwLevel === 'X'
+        );
+      } else if (params.nsfw.toLowerCase() === 'none') {
+        // For safe content, only show items marked as not NSFW and level None
+        filteredItems = filteredItems?.filter(item =>
+                item.nsfw === false && item.nsfwLevel === 'None'
+        );
+      }
+
+      // Add Fisher-Yates shuffle function
+      const shuffle = array => {
+        for (let i = array.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [array[i], array[j]] = [array[j], array[i]];
+        }
+        return array;
+      };
+
+      // Shuffle the filtered items before returning
+      return shuffle(filteredItems?.map(item => item.url) || []);
     } catch (error) {
       console.warn('Error fetching images:', error);
       return null;
@@ -324,10 +349,9 @@
 
     try {
       isTransitioning = true;
-      const nextIndex = (activeIndex + 1) % 2; // We have 2 background elements
+      const nextIndex = (activeIndex + 1) % 2;
 
-      // Set the next image's source
-      backgrounds[nextIndex].src = imageCache[currentImageIndex].url;
+      backgrounds[nextIndex].src = imageCache[currentImageIndex];
 
       // Wait a brief moment to ensure the image is loaded
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -386,7 +410,7 @@
       imageCache = fetchedImages;
 
       // Set up first image
-      backgrounds[0].src = imageCache[0].url;
+      backgrounds[0].src = imageCache[0];
       backgrounds[0].classList.add('active');
       currentImageIndex = 1;
 
