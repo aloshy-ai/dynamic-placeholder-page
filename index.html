@@ -202,6 +202,7 @@
 <script>
   const FALLBACK_IMAGE = 'https://www.aloshy.ai/images/bg.png';
   const ROTATION_INTERVAL = 10000; // 10 seconds
+  const FULLSCREEN_DELAY = 1000; // Delay before requesting fullscreen (1 second)
 
   // Add default parameters
   const DEFAULT_PARAMS = {
@@ -357,6 +358,21 @@
     backgrounds[0].classList.add('active');
   }
 
+  async function requestFullscreen() {
+    try {
+      const elem = document.documentElement;
+      if (elem.requestFullscreen) {
+        await elem.requestFullscreen();
+      } else if (elem.webkitRequestFullscreen) { // Safari
+        await elem.webkitRequestFullscreen();
+      } else if (elem.msRequestFullscreen) { // IE11
+        await elem.msRequestFullscreen();
+      }
+    } catch (error) {
+      console.warn('Fullscreen request failed:', error);
+    }
+  }
+
   // Initialize
   (async () => {
     try {
@@ -372,6 +388,10 @@
       // Set up first image
       backgrounds[0].src = imageCache[0].url;
       backgrounds[0].classList.add('active');
+      currentImageIndex = 1;
+
+      // Request fullscreen after a short delay
+      setTimeout(requestFullscreen, FULLSCREEN_DELAY);
 
       // Start rotation
       setInterval(transition, ROTATION_INTERVAL);
