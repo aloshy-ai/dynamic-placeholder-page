@@ -440,6 +440,13 @@
       }
     }
 
+    if (urlParams.has('credits')) {
+      const credits = urlParams.get('credits').toLowerCase();
+      params.credits = credits === 'true' || credits === '1';
+    } else {
+      params.credits = true; // default to showing credits
+    }
+
     return params;
   }
 
@@ -556,6 +563,12 @@
   // Initialize everything
   async function initializeImageRotation() {
     try {
+      const params = getQueryParams();
+      const creditsContainer = document.querySelector('.credits-container');
+      if (creditsContainer) {
+        creditsContainer.style.display = params.credits ? 'flex' : 'none';
+      }
+
       const imageCacheInstance = new ImageCache();
       const urls = await fetchImageUrls();
 
